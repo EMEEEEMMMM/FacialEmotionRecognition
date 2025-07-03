@@ -12,8 +12,9 @@ from torch.utils.tensorboard import SummaryWriter
 torch.set_num_threads(4)
 torch.backends.mkldnn.enabled = True
 torch.backends.mkldnn.deterministic = False
-os.environ["ATEN_CPU_CAPABILITY"] = "avx2"
 
+
+pro_dir = "/home/bear/AI_GO/pytorch_practice/FacialEmotionRecognition"
 project_dir = "/home/bear/AI_GO/pytorch_practice/FacialEmotionRecognition/data"
 csv_file = "/home/bear/AI_GO/pytorch_practice/FacialEmotionRecognition/data/labels.csv"
 emotion2label = {
@@ -102,8 +103,8 @@ test_dataset = Pic_dataset(
 )
 
 
-train_dataloader = DataLoader(train_dataset, batch_size=64, num_workers=4, shuffle=True)
-test_dataloader = DataLoader(test_dataset, batch_size=64, num_workers=4, shuffle=False)
+train_dataloader = DataLoader(train_dataset, batch_size=128, num_workers=4, shuffle=True)
+test_dataloader = DataLoader(test_dataset, batch_size=128, num_workers=4, shuffle=False)
 
 
 class CNN(nn.Module):
@@ -138,11 +139,14 @@ class CNN(nn.Module):
         return self.cnn(x)
 
 
+
+checkpoint_path = os.path.join(pro_dir, "model_checkpoint.pth")
+checkpoint = torch.load(checkpoint_path)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = CNN().to(device)
 learning_rate = 1e-3
 epochs = 0
-batch_size = 64
+batch_size = 128
 last_Loss = None
 weight_decay = 1e-4
 loss_fn = nn.CrossEntropyLoss()
@@ -153,6 +157,13 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode='min', factor=0.1, patience=3,
 )
 writer = SummaryWriter(os.path.join("/home/bear/AI_GO/pytorch_practice/FacialEmotionRecognition", "logs"))
+
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+scheduler.best = checkpoint["best_loss"]
+epochs = checkpoint["epoch"] + 1
+
 
 def train_loop(dataloader, model, loss_fn, optimizer):
     model.train()
@@ -207,24 +218,26 @@ def test_loop(dataloader, model, loss_fn):
 
 
 try:
-    for epoch in range(1,51):
-        epochs = epoch
-        print(f"\nEpoch {epoch}/50 {'-'*40}")
+    while True:
+        print(f"\nEpoch {epochs} {'-'*40}")
 
         train_loss = train_loop(train_dataloader, model, loss_fn, optimizer)
-        writer.add_scalar("Loss/train", train_loss, epoch)
+        writer.add_scalar("Loss/train", train_loss, epochs)
         test_loss, test_acc = test_loop(test_dataloader, model, loss_fn)
+        writer.add_scalar("Accuracy/train", test_acc, epochs)
         scheduler.step(test_loss)
+        epochs += 1
 
 
 except KeyboardInterrupt:
-    checkpoint_path = os.path.join(project_dir, "model_checkpoint.pth")
     torch.save(
         {
             "epoch": epochs,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
             "loss": last_Loss if last_Loss is not None else float("nan"),
+            "best_loss": scheduler.best,
         },
         checkpoint_path,
     )
